@@ -3312,6 +3312,39 @@ MOCK_EOF
   fi
 }
 
+# repo-access: 1. default off → -C target is a throwaway temp dir, not cwd
+@test "repo-access: default off → codex -C is not the project cwd" {
+  export REVIEW_ENGINE="codex"
+  local proj="${TEST_TEMP_DIR}/proj"
+  mkdir -p "$proj"
+  create_mock_codex "<verdict>APPROVE</verdict>
+ok"
+  INPUT=$(build_input cwd="$proj")
+  run_hook
+
+  local args
+  args=$(agy_args codex)
+  [[ "$args" == *"-C "* ]]
+  [[ "$args" != *"-C ${proj}"* ]]
+}
+
+# repo-access: 2. opt-in → -C <cwd>, sandbox stays read-only
+@test "repo-access: REVIEW_REPO_ACCESS=1 → codex -C cwd, still read-only" {
+  export REVIEW_ENGINE="codex"
+  export REVIEW_REPO_ACCESS=1
+  local proj="${TEST_TEMP_DIR}/proj"
+  mkdir -p "$proj"
+  create_mock_codex "<verdict>APPROVE</verdict>
+ok"
+  INPUT=$(build_input cwd="$proj")
+  run_hook
+
+  local args
+  args=$(agy_args codex)
+  [[ "$args" == *"-C ${proj}"* ]]
+  [[ "$args" == *"-s read-only"* ]]
+}
+
 @test "codex: byte-truncated non-ASCII CLAUDE.md → prompt sanitized to valid UTF-8" {
   export REVIEW_ENGINE="codex"
   # Reproduce the real-world break: PROJECT_MD is read via clamp_head_bytes

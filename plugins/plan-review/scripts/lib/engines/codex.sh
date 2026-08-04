@@ -22,9 +22,10 @@ engine_probe() {
   # Empty CODEX_MODEL means inherit codex's own ~/.codex/config.toml default.
   CODEX_MODEL="${CODEX_MODEL:-}"
 
-  # codex-only temp resources: a sandboxed workdir (-C target, deliberately NOT
-  # the project cwd — codex runs read-only but there's no reason to hand it the
-  # real tree) and a merged prompt file (system instructions + PROMPT_FILE's
+  # codex-only temp resources: a sandboxed workdir (-C target — by default a
+  # fresh empty temp dir, deliberately NOT the project cwd: codex runs
+  # read-only but there's no reason to hand it the real tree) and a merged
+  # prompt file (system instructions + PROMPT_FILE's
   # dynamic content — kept SEPARATE from PROMPT_FILE itself so the REST
   # fallback's --rawfile read of PROMPT_FILE doesn't double-send the system
   # instructions). Registered into the generic cleanup arrays so the caller's
@@ -36,8 +37,20 @@ engine_probe() {
   # below (ENGINE_ERR_POLICY) because codex echoes the FULL prompt to stderr
   # before its real diagnostics — see engine_err_filter() further down,
   # which must never let that raw content reach LOG_FILE wholesale.
-  CODEX_WORKDIR=$(mktemp -d)
-  ENGINE_TMP_DIRS+=("$CODEX_WORKDIR")
+  #
+  # REVIEW_REPO_ACCESS=1 (opt-in, default off) flips the workdir to the
+  # project cwd instead: the reviewer can then ground its findings — and
+  # verify the plan author's factual rebuttals — against the actual code,
+  # still under `-s read-only`. Trade-offs the user accepts by opting in:
+  # repo content becomes reachable by the engine's provider, and rounds get
+  # slower as the reviewer reads files. The real cwd must NEVER be added to
+  # ENGINE_TMP_DIRS — the cleanup trap rmdir's every entry.
+  if [ "${REVIEW_REPO_ACCESS:-0}" = "1" ] && [ -n "${CWD:-}" ] && [ -d "${CWD:-}" ]; then
+    CODEX_WORKDIR="$CWD"
+  else
+    CODEX_WORKDIR=$(mktemp -d)
+    ENGINE_TMP_DIRS+=("$CODEX_WORKDIR")
+  fi
   CODEX_PROMPT_FILE=$(mktemp)
   ENGINE_TMP_FILES+=("$CODEX_PROMPT_FILE" "${CODEX_PROMPT_FILE}.u8")
   ENGINE_ERR_POLICY="filtered"

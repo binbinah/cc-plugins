@@ -95,6 +95,7 @@ names.
 | `REVIEW_DRY_RUN` | `0` | Set `1` to skip engine call (synthetic APPROVE) |
 | `REVIEW_MAX_ROUNDS` | `3` | Max non-Critical consultation rounds (CONCERNS accumulation) before escalation |
 | `REVIEW_MAX_TOTAL_ROUNDS` | `20` | Absolute global ceiling (including REJECT rounds); hard-blocks once reached |
+| `REVIEW_REPO_ACCESS` | `0` | codex engine only. Set `1` to run the reviewer with `-C <project cwd>` (still `-s read-only`) instead of an empty temp dir, letting it ground findings — and verify the plan author's factual rebuttals — against real code. Trade-offs: repo content becomes readable by the engine's provider, and rounds get slower |
 | `REVIEW_ENGINE_TIMEOUT` | `595` | Engine call timeout in seconds (requires `timeout`/`gtimeout` on `PATH`) |
 | `REVIEW_API_URL` | _(empty)_ | REST API fallback base URL (OpenAI-compatible), used when the CLI path fails |
 | `REVIEW_API_KEY` | _(empty)_ | REST API fallback bearer token |
@@ -180,7 +181,7 @@ When `REVIEW_ENGINE=claude`, the script spawns `claude -p` with triple isolation
 When `REVIEW_ENGINE=codex`, the script spawns `codex exec` with a parallel set of isolation flags:
 
 1. **`-s read-only`** — sandbox policy; the reviewer process cannot write to disk
-2. **`-C <fresh empty temp dir>`** — the working root is a throwaway empty directory, not the user's project. This relocates the working root; on its own it does not stop a tool from reaching paths outside that directory (see the tool-surface caveat below)
+2. **`-C <fresh empty temp dir>`** — the working root is a throwaway empty directory, not the user's project. This relocates the working root; on its own it does not stop a tool from reaching paths outside that directory (see the tool-surface caveat below). With `REVIEW_REPO_ACCESS=1` the working root becomes the project cwd instead (sandbox stays read-only) — an explicit opt-in trading isolation for grounded review
 3. **`--ephemeral`** — no session files persisted to disk
 4. **`--skip-git-repo-check`** — required because the isolated temp dir is not a git repo
 
@@ -365,5 +366,6 @@ This plugin sends the following data to the configured review engine — the Gem
 - **Recent conversation** — last 3 user messages from the session transcript
 - **Plan content** — the full implementation plan under review
 - **Prior review thread** (v1.5.0, multi-round only) — up to the most recent 24KB of accumulated verdicts and review findings from earlier rounds on the same plan (see [Round Memory](#round-memory-v150)), sent to whichever provider handles the CURRENT round — not necessarily the same provider that produced the earlier findings if `REVIEW_ENGINE` changed mid-session
+- **Repository contents** — only with `REVIEW_REPO_ACCESS=1` (codex): the reviewer runs read-only inside the project working directory and may read any file in it
 
 This context is necessary for meaningful adversarial review. If your CLAUDE.md or conversations contain sensitive information (internal hostnames, credentials, business logic), be aware that this data will be sent to the external API — and, on multi-round reviews, may be echoed back into the thread and re-sent on subsequent rounds.

@@ -84,6 +84,10 @@ reset_leaky_env() {
   # Degraded state TTL override
   unset REVIEW_ENGINE_DEGRADE_TTL
 
+  # codex repo access opt-in (a user-level settings.json env export would
+  # otherwise leak in and flip the default-off tests)
+  unset REVIEW_REPO_ACCESS
+
   # Per-engine model ids. None of these change control flow today, so an
   # exported value breaks nothing at present — they are listed to keep this
   # function matching the rule stated above rather than drifting into "the
