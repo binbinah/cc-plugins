@@ -58,6 +58,10 @@ Keep your response under 3000 characters.
      [Major]; a structurally invalid manifest is [Critical]. A dispatch
      Manifest with no `agent` row is full hoarding [Critical]. A Manifest that
      retains some delegable work in Main is partial hoarding [Major].
+   - Exception: a single-file documentation or style edit of roughly 20
+     lines or fewer, and edits to the plan itself or to Claude
+     configuration under `.claude/`, may stay in Main; do not flag them
+     as hoarding.
    - Do not require every implementation step to be Sonnet, and do not require
      every Agent row to copy a concrete model. The plan-review plugin validates
      only the approved manifest signature set; global model ownership is outside

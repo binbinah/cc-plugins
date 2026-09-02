@@ -9,6 +9,7 @@
 HOOK_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/plan-review.sh"
 PRECOMPACT_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/precompact-review.sh"
 DISPATCH_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/dispatch-check.sh"
+MAIN_EDIT_GATE_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/main-edit-gate.sh"
 SECOND_OPINION_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/second-opinion.sh"
 SYSTEM_PROMPT_PLAN_FILE="${BATS_TEST_DIRNAME}/../scripts/assets/review-plan.md"
 SYSTEM_PROMPT_COMMON_FILE="${BATS_TEST_DIRNAME}/../scripts/assets/review-common.md"
@@ -1064,6 +1065,92 @@ run_dispatch_check() {
   rm -f "$stderr_file"
 }
 
+# --- Main-Edit-Gate Helpers ---
+
+# create_main_edit_gate_marker <session_id> [agent_rows]
+#   Writes a main-edit-gate marker to REVIEW_COUNTER_DIR/.main-edit-gate-<session>.
+#   agent_rows defaults to 1 (armed) when omitted.
+create_main_edit_gate_marker() {
+  local session="$1"
+  local agent_rows="${2:-1}"
+  jq -n --arg hash "test-hash" --argjson now "$(date +%s)" --argjson rows "$agent_rows" \
+    '{plan_hash: $hash, created_at: $now, agent_rows: $rows}' \
+    > "${REVIEW_COUNTER_DIR}/.main-edit-gate-${session}"
+}
+
+# build_edit_input [tool_name=Edit] [session_id=test-session] [cwd=X]
+#                   [file_path=X] [notebook_path=X] [command=X]
+#                   [agent_id=X] [agent_type=X]
+#   Constructs a JSON PreToolUse input for main-edit-gate.sh. Only the
+#   tool_input sub-field that was supplied is included; agent_id/agent_type
+#   are top-level fields (sub-agent identity) and are omitted unless given.
+build_edit_input() {
+  local tool_name="Edit"
+  local session_id="test-session"
+  local cwd=""
+  local file_path="" notebook_path="" command=""
+  local agent_id="" agent_type=""
+
+  for arg in "$@"; do
+    local key="${arg%%=*}"
+    local val="${arg#*=}"
+    case "$key" in
+      tool_name)     tool_name="$val" ;;
+      session_id)    session_id="$val" ;;
+      cwd)           cwd="$val" ;;
+      file_path)     file_path="$val" ;;
+      notebook_path) notebook_path="$val" ;;
+      command)       command="$val" ;;
+      agent_id)      agent_id="$val" ;;
+      agent_type)    agent_type="$val" ;;
+    esac
+  done
+
+  local tool_input='{}'
+  if [ -n "$file_path" ]; then
+    tool_input=$(jq -n --arg fp "$file_path" '{file_path: $fp}')
+  elif [ -n "$notebook_path" ]; then
+    tool_input=$(jq -n --arg np "$notebook_path" '{notebook_path: $np}')
+  elif [ -n "$command" ]; then
+    tool_input=$(jq -n --arg cmd "$command" '{command: $cmd}')
+  fi
+
+  local result
+  result=$(jq -n \
+    --arg tn "$tool_name" \
+    --arg sid "$session_id" \
+    --arg cwd "$cwd" \
+    --argjson ti "$tool_input" \
+    '{tool_name: $tn, session_id: $sid, cwd: $cwd, tool_input: $ti}')
+
+  if [ -n "$agent_id" ]; then
+    result=$(printf '%s' "$result" | jq --arg aid "$agent_id" '. + {agent_id: $aid}')
+  fi
+  if [ -n "$agent_type" ]; then
+    result=$(printf '%s' "$result" | jq --arg at "$agent_type" '. + {agent_type: $at}')
+  fi
+
+  printf '%s' "$result"
+}
+
+# run_main_edit_gate
+#   Feeds INPUT through main-edit-gate.sh via stdin.
+#   Sets: HOOK_STDOUT, HOOK_STDERR, HOOK_EXIT
+run_main_edit_gate() {
+  local input="${INPUT:-$(build_edit_input)}"
+
+  HOOK_STDOUT=""
+  HOOK_STDERR=""
+  HOOK_EXIT=0
+
+  local stderr_file
+  stderr_file=$(mktemp)
+
+  HOOK_STDOUT=$(bash "$MAIN_EDIT_GATE_SCRIPT" <<< "$input" 2>"$stderr_file") || HOOK_EXIT=$?
+  HOOK_STDERR=$(cat "$stderr_file")
+  rm -f "$stderr_file"
+}
+
 # --- Degraded State Helpers ---
 
 # create_degraded_file [age_seconds]
@@ -1099,6 +1186,23 @@ assert_allowed() {
     echo "Expected allow, got deny: $HOOK_STDOUT"
     return 1
   fi
+}
+
+# assert_gate_allowed
+#   Stricter than assert_allowed: main-edit-gate.sh never emits an "allow"
+#   JSON, only silence (exit 0, empty stdout) or a deny JSON. Asserting on
+#   that actual observable contract catches a stray allow-JSON regression
+#   that assert_allowed's broader "not a deny" acceptance would pass through.
+assert_gate_allowed() {
+  [ "$HOOK_EXIT" -eq 0 ] || {
+    echo "Expected exit 0, got $HOOK_EXIT"
+    echo "stderr: $HOOK_STDERR"
+    return 1
+  }
+  [ -z "$HOOK_STDOUT" ] || {
+    echo "Expected empty stdout (gate never emits allow JSON), got: $HOOK_STDOUT"
+    return 1
+  }
 }
 
 # assert_approve_json

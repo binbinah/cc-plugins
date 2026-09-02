@@ -2122,7 +2122,7 @@ ${rows}"
   create_mock_engine "agy" "<verdict>APPROVE</verdict>
 Approved."
   local plan
-  plan=$(manifest_v2_plan '| 1 | main  | -        | -       | -     | - | - |
+  plan=$(manifest_v2_plan '| 1 主线批准 | main  | -        | -       | -     | - | - |
 | 2 | agent | dev-econ | preset  | -     | 1 | - |
 | 3 | agent | Explore  | runtime | haiku | 1 | 2 |')
   INPUT=$(build_input "plan=$plan")
@@ -2229,7 +2229,7 @@ Use Task( for isolation.
   create_mock_engine "agy" "<verdict>APPROVE</verdict>
 Approved."
   local plan
-  plan=$(manifest_v2_plan '| 1 | main  | -        | -       | -     | - | - |
+  plan=$(manifest_v2_plan '| 1 主线批准 | main  | -        | -       | -     | - | - |
 | 2 | agent | dev-econ | preset  | -     | 1 | - |
 | 3 | agent | Explore  | runtime | haiku | 1 | 2 |')
   INPUT=$(build_input "plan=$plan")
@@ -4630,4 +4630,44 @@ line3"
   [[ "$(cat "$args_file")" == *"Round 400 —"* ]]
   run bash -c "iconv -f UTF-8 -t UTF-8 < '$args_file' >/dev/null 2>&1"
   [ "$status" -eq 0 ]
+}
+
+# =============================================================================
+# Main-edit-gate marker (armed on APPROVE alongside the dispatch state file)
+# =============================================================================
+
+# APPROVE with a v2 Manifest that delegates 2 rows to agent → the gate marker
+# is written atomically (same moment as the dispatch state file) and its
+# agent_rows field matches the actual count of location=agent rows. The main
+# row's step cell ("1 主线批准") uses the "编号 标签" shape so it also clears
+# the C1-C4 pre-flight (lib/preflight-extra.sh) added alongside this gate —
+# a bare "1" would be denied before the engine is ever called.
+@test "main-edit-gate: APPROVE with agent rows in the Manifest arms the gate marker" {
+  create_mock_engine "agy" "<verdict>APPROVE</verdict>
+Approved."
+  local plan
+  plan=$(manifest_v2_plan '| 1 主线批准 | main  | -        | -       | -     | - | - |
+| 2 | agent | dev-econ | preset  | -     | 1 | - |
+| 3 | agent | Explore  | runtime | haiku | 1 | 2 |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+
+  assert_ack_approve_json
+  local gate_marker="${REVIEW_COUNTER_DIR}/.main-edit-gate-test-session"
+  [ -f "$gate_marker" ]
+  jq -e '.agent_rows == 2' "$gate_marker" >/dev/null
+}
+
+# APPROVE with no Manifest at all → nothing for the gate to arm; the marker
+# must not be written (main-edit-gate.sh's own fail-open guard reads its
+# ABSENCE as "gate not armed", so a stray file here would wrongly enforce the
+# gate against a plan that never delegated any work).
+@test "main-edit-gate: APPROVE without a Manifest does not write the gate marker" {
+  create_mock_engine "agy" "<verdict>APPROVE</verdict>
+Approved."
+  INPUT=$(build_input plan="Edit one file and run its test.")
+  run_hook
+
+  assert_ack_approve_json
+  [ ! -f "${REVIEW_COUNTER_DIR}/.main-edit-gate-test-session" ]
 }

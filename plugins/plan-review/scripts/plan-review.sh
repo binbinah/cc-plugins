@@ -56,12 +56,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LIB_COMMON="$SCRIPT_DIR/lib/common.sh"
 LIB_PLAN_SOURCE="$SCRIPT_DIR/lib/plan-source.sh"
 LIB_MANIFEST="$SCRIPT_DIR/lib/manifest.sh"
+LIB_PREFLIGHT_EXTRA="$SCRIPT_DIR/lib/preflight-extra.sh"
 LIB_VERDICT="$SCRIPT_DIR/lib/verdict.sh"
 LIB_CONSULT="$SCRIPT_DIR/lib/consult.sh"
 PROMPT_ASSET_PLAN="$SCRIPT_DIR/assets/review-plan.md"
 PROMPT_ASSET_COMMON="$SCRIPT_DIR/assets/review-common.md"
 
-for _lib in "$LIB_COMMON" "$LIB_PLAN_SOURCE" "$LIB_MANIFEST" "$LIB_VERDICT"; do
+for _lib in "$LIB_COMMON" "$LIB_PLAN_SOURCE" "$LIB_MANIFEST" "$LIB_PREFLIGHT_EXTRA" "$LIB_VERDICT"; do
   # `-s` (exists AND non-empty) catches both gaps in one test: a missing
   # file fails `-f` already, but an empty file (or one gutted of all its
   # function bodies) passes `-f` clean, then `source` "succeeds" (sourcing
@@ -102,6 +103,7 @@ _source_lib() {
 _source_lib "$LIB_COMMON"
 _source_lib "$LIB_PLAN_SOURCE"
 _source_lib "$LIB_MANIFEST"
+_source_lib "$LIB_PREFLIGHT_EXTRA"
 _source_lib "$LIB_VERDICT"
 # NOTE: `unset -f _source_lib` deliberately deferred until after the engine
 # libs (rest.sh + the selected engine) are sourced further down — this
@@ -275,6 +277,10 @@ HISTORY_FILE="$COUNTER_DIR/.review-history-${SESSION_ID}"
 # them for every valid plan-review invocation, including Tier0 plans that have
 # no Manifest and therefore never enter the approval serializer branch.
 find "$DISPATCH_DIR" -maxdepth 1 -name '.dispatch-*.json*' -mmin +30 -delete 2>/dev/null || true
+# Same debris cleanup for the execution-phase main-edit-gate marker (armed on
+# APPROVE, consumed by scripts/main-edit-gate.sh) — a session that is never
+# resumed would otherwise leave it around forever.
+find "$DISPATCH_DIR" -maxdepth 1 -name '.main-edit-gate-*' -mmin "+${MAIN_EDIT_GATE_TTL_MIN:-180}" -delete 2>/dev/null || true
 
 # --- Read counter (new format ATTEMPT:TOTAL, backward-compat with old single-number) ---
 IFS=: read -r ATTEMPT TOTAL_ROUNDS <<< "$(cat "$COUNTER_FILE" 2>/dev/null || echo "0:0")"
@@ -443,6 +449,27 @@ ${MANIFEST_EXAMPLE}"
   HOARDING_JSON=$(printf '%s' "$HOARDING_MSG" | jq -Rs .)
   cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":${HOARDING_JSON}}}
+EOF
+  exit 0
+fi
+
+# --- Pre-flight writing-discipline checks (lib/preflight-extra.sh, C1-C4) ---
+# Same contract as the manifest pre-flight blocks above: format correction,
+# NOT a negotiation round — TOTAL_ROUNDS only, ATTEMPT stays frozen. Runs
+# entirely offline (no engine call) so a plan that fails here never burns a
+# ~60s consultation round on issues a local check can already name exactly.
+if [ "${PREFLIGHT_EXTRA_DISABLED:-0}" != "1" ] && ! preflight_extra_check "$PLAN"; then
+  TOTAL_ROUNDS=$((TOTAL_ROUNDS + 1))
+  echo "${ATTEMPT:-0}:${TOTAL_ROUNDS}" > "$COUNTER_FILE"
+  log_decision "decision=deny reason=preflight-extra detail=${PREFLIGHT_EXTRA_CODES}"
+  PREFLIGHT_EXTRA_MSG="## Red Team Pre-flight — PLAN DISCIPLINE
+
+${PREFLIGHT_EXTRA_ERROR}
+
+修正后重新调用 ExitPlanMode；此类拒绝不计磋商轮次。"
+  PREFLIGHT_EXTRA_JSON=$(printf '%s' "$PREFLIGHT_EXTRA_MSG" | jq -Rs .)
+  cat <<EOF
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":${PREFLIGHT_EXTRA_JSON}}}
 EOF
   exit 0
 fi
@@ -736,6 +763,27 @@ if [ "$VERDICT" = "APPROVE" ]; then
       mv -f "$DISPATCH_TEMP" "$DISPATCH_FILE"
       dispatch_bytes=$(wc -c < "$DISPATCH_FILE" | tr -d ' ')
       log_decision "manifest-written file=$DISPATCH_FILE bytes=$dispatch_bytes"
+
+      # Arm the execution-phase main-session edit gate (scripts/main-edit-gate.sh)
+      # whenever the just-approved manifest delegates at least one row to an
+      # agent. Written here, at the same moment the dispatch state is
+      # serialized — the gate must already be armed by the time Claude's very
+      # next tool call happens, which is before the ack-round is ever seen.
+      agent_rows=$(jq '[.steps[] | select(.location=="agent")] | length' "$DISPATCH_FILE" 2>/dev/null || echo 0)
+      [[ "$agent_rows" =~ ^[0-9]+$ ]] || agent_rows=0
+      if [ "$agent_rows" -ge 1 ]; then
+        GATE_MARKER="$COUNTER_DIR/.main-edit-gate-${SESSION_ID}"
+        GATE_TEMP=$(mktemp "$COUNTER_DIR/.main-edit-gate-${SESSION_ID}.XXXXXX" 2>/dev/null || true)
+        if [ -n "$GATE_TEMP" ] \
+           && jq -n --arg hash "$(plan_hash "$PLAN")" --argjson created_at "$(date +%s)" --argjson rows "$agent_rows" \
+                '{plan_hash: $hash, created_at: $created_at, agent_rows: $rows}' > "$GATE_TEMP" 2>/dev/null \
+           && mv -f "$GATE_TEMP" "$GATE_MARKER"; then
+          log_decision "main-edit-gate-armed rows=$agent_rows"
+        else
+          rm -f "${GATE_TEMP:-}" || true
+          log_decision "main-edit-gate-arm-failed" || true
+        fi
+      fi
     else
       rm -f "${DISPATCH_TEMP:-}" "$DISPATCH_FILE"
       log_decision "manifest-write-skipped reason=invalid-json"

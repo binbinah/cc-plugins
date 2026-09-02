@@ -104,6 +104,7 @@ names.
 | `REVIEW_HOOK_BUDGET` | `595` | Total hook time budget in seconds (600s hook timeout minus 5s margin); governs the retry loop and REST timeout clamping |
 | `REVIEW_CAPACITY_DELAY` | `25` | Wait time after detecting `MODEL_CAPACITY_EXHAUSTED` (skipped — breaks immediately to REST — when REST is configured) |
 | `REVIEW_ENGINE_DEGRADE_TTL` | `600` | TTL in seconds for the Gemini degrade state; subsequent hooks within the TTL skip the CLI and go straight to REST. Shortened from 3600 in v1.2.0 — agy 429 probing is cheap (~26s median) and multi-round session reuse lowers 429 frequency, so a shorter cooldown recovers agy faster without thrashing |
+| `PREFLIGHT_EXTRA_DISABLED` | `0` | Set `1` to skip the C1–C4 [plan discipline pre-flight](#plan-discipline-pre-flight-v180) checks (kill switch) |
 
 Legacy variables (`GEMINI_REVIEW_OFF`, `GEMINI_DRY_RUN`, `GEMINI_MAX_REVIEWS`) are supported via fallback mapping.
 
@@ -126,6 +127,13 @@ is written, separate from `plan-review.log`.
 |----------|---------|-------------|
 | `DISPATCH_CHECK_DISABLED` | `0` | Set `1` to disable the Layer 2 Manifest v2 signature check (kill switch) |
 
+### `main-edit-gate.sh` (execution-time main-session edit gate)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAIN_EDIT_GATE_DISABLED` | `0` | Set `1` to disable the [main-session edit gate](#main-session-edit-gate-v180) (kill switch) |
+| `MAIN_EDIT_GATE_TTL_MIN` | `180` | Minutes before an armed gate marker expires; on expiry the marker is treated as pass-through and deleted |
+
 ### Dispatch Manifest v2
 
 A plan with dispatch keywords must include a Dispatch Manifest with at least one
@@ -145,6 +153,106 @@ call count, execution order, or global model ownership policy. State with no
 schema marker is treated as temporary Manifest v1 compatibility state: the hook
 emits a migration prompt and skips enforcement. Corrupt, stale, or invalid state
 fails open.
+
+## Plan discipline pre-flight (v1.8.0)
+
+Runs locally, after the three existing pre-flight checks (INVALID DISPATCH
+MANIFEST, MISSING DISPATCH MANIFEST, DISPATCH HOARDING) and before any engine
+call. It adds four writing-discipline checks (C1–C4) that previously consumed
+whole review rounds — the check itself runs in well under a second. A failure
+does **not** count as a consultation round: it only increments `TOTAL_ROUNDS`
+(the global ceiling tracked by `REVIEW_MAX_TOTAL_ROUNDS`), leaving `ATTEMPT`
+(the CONCERNS/REJECT escalation counter) frozen. On failure the hook denies
+with the heading `## Red Team Pre-flight — PLAN DISCIPLINE`, in the same deny
+JSON shape as the other pre-flight checks.
+
+Set `PREFLIGHT_EXTRA_DISABLED=1` to skip all four checks (kill switch).
+
+| # | Trigger (plan text matches any of) | Pass condition | Rejection message |
+|---|---|---|---|
+| **C1 Rollback** | `生产`, `prod` (word-boundary), `DML`, `dml-apply`, `发布`, `上线`, `Apollo`, `SCM`, `配置中心`, `ALTER TABLE`, `migration`, `schema` | A Markdown heading (`^#{1,6} `) containing `回滚`, `回退`, or `rollback` exists, and that section's body (up to the next heading) satisfies either: contains `不适用` **and** `原因`; or has at least one list/numbered item (`^[[:space:]]*([-*]\|[0-9]+[.)])[[:space:]]`) or one fenced code block | Must write rollback steps (a list or commands); if not applicable, write `不适用，原因：…`; an empty section does not count |
+| **C2 Concurrency & failure compensation** | `锁`, `租约`, `lease`, `NSQ`, `补偿`, `幂等`, `@Transactional`, `事务`, `外部系统`, `状态机`, `state ?=` | A heading containing `并发`, `竞态`, `失败补偿`, `一致性`, `concurrency`, or `幂等` exists, and that section's body contains **5 distinct list items**, each starting with one of 5 fixed labels (item regex `^[[:space:]]*([-*]\|[0-9]+[.)])[[:space:]]*\**(原子性\|部分失败补偿\|幂等键\|缓存失效\|重入与超时)\**[:：]`), with at least 12 bytes remaining after the label once whitespace is trimmed, measured under a forced `LC_ALL=C` byte count (≈ 4 Han characters or 12 ASCII characters, so the threshold does not drift with the hook's locale); an item containing `不适用` must also contain `原因`. Stacking multiple keywords on one line does not count as multiple items | Lists all 5 fixed labels with their status (missing / body too short / `不适用` without `原因`) |
+| **C3 Non-mock verification** | `mock`, `mockito` | The plan also contains any of: `集成测试`, `integration`, `数据库`, `SELECT`, `mvn test`, `pre 环境`, `pre 实测`, `curl`, `端到端`, `e2e`, `bats`, `真实环境`, `实机` | Verification cannot rely on mock unit tests alone; at least one real-environment or database-level check is required |
+| **C4 Main-row work nature** | Only when `has_manifest` and `validate_manifest_v2` already passed; iterates `manifest_table_rows` with `location=main` | The `step` cell must be "number + space + label" (regex `^[0-9]+([.][0-9]+)?[[:space:]]+.+`); the label must not match `编译`, `构建`, `跑测试`, `执行测试`, `测试执行`, `取证`, `读 ?diff`, `截图`, `采集`, `抓取`, `回归`, `实现`, `编写`, `编码`, `改代码`, `检索`, `通读`, `逐行` | Missing label: "main-row step must be written as '编号 标签'"; keyword matched: "step N's label '\<label\>' is execution/data-fetch work — move it to an agent row" |
+
+For C1/C2 the "section body" is extracted with `awk`: from the line after the
+matched heading up to the next `^#{1,6} ` line, or end of file. A bold-label
+form is no longer accepted as a section marker.
+
+## Main-session edit gate (v1.8.0)
+
+When `plan-review.sh` APPROVEs a plan whose Dispatch Manifest contains at
+least one `agent` row, it atomically writes a marker file
+`${REVIEW_COUNTER_DIR:-/tmp/claude-reviews}/.main-edit-gate-<session_id>`
+(JSON: `plan_hash`, `created_at`, `agent_rows`). A separate hook,
+`scripts/main-edit-gate.sh`, is registered on PreToolUse for `Edit`, `Write`,
+`MultiEdit`, `NotebookEdit`, and `Bash`: while the marker is live, the main
+session may not edit project source directly — the Manifest already assigned
+that work to a dispatched agent. Dispatched sub-agents are unaffected: they
+carry their own `session_id`, and the hook input's `agent_id`/`agent_type`
+identifies them.
+
+**Pass-through conditions** (any one is enough to allow the call through,
+with no output):
+
+- `MAIN_EDIT_GATE_DISABLED=1` (kill switch)
+- `jq` is not available
+- the hook input has no `session_id`
+- the hook input has a non-empty `agent_id` or `agent_type`
+- the marker file for this session does not exist
+- the marker is older than `MAIN_EDIT_GATE_TTL_MIN` minutes (default `180`;
+  a non-numeric or empty `MAIN_EDIT_GATE_TTL_MIN` falls back to `180`); the
+  stale marker is deleted as a side effect
+- the marker file's content is not valid JSON, or its `agent_rows` is `< 1`
+  — both fail open (allowed through)
+
+**Path rule** (`Edit`/`Write`/`MultiEdit` read `.tool_input.file_path`,
+`NotebookEdit` reads `.tool_input.notebook_path`; relative paths are resolved
+against `.cwd`):
+
+- a path outside `cwd` → allowed
+- a path whose basename ends in `.md` → allowed
+- a path containing `/.claude/` → allowed
+- anything else → denied
+
+**Bash coverage** — while the gate is active, `main-edit-gate.sh` splits the
+command on `&&`, `;`, `|`, `||`, and bare newlines (`\n`, `\r\n`) — a
+multi-line command is judged one physical line at a time — and inspects each
+piece for a *known write-file command family*, then applies the same path
+rule above to every extracted target. Splitting on newlines is a deliberate
+trade-off: a heredoc body line that merely *looks like* a write command (for
+example a code sample being written into a file via `Edit`/`Write`, quoted
+inside a `cat <<EOF` block) is conservatively denied along with real
+commands, since the hook cannot distinguish heredoc payload from executable
+text without a real shell parser.
+
+- redirection (`>`, `>>`, `>|`, `&>`, `&>>`), skipping `/dev/null`; a pure
+  fd-duplication form (`2>&1`, `>&2`) is not treated as a write target, but
+  an fd-numbered redirect to a path (e.g. `2> path`) is judged like any
+  other redirection
+- `tee` (including multiple targets)
+- in-place rewrites: `sed -i`/`--in-place`, `perl -i`/`-pi`/`-ni`
+- copy/move/install: `cp`, `mv`, `install`, `rsync`, `ln` — including
+  `-t <dir>`/`-t<dir>`/`--target-directory[=]<dir>`; any other value-taking
+  long option that isn't a recognized boolean is treated as **not statically
+  determinable** and denied
+- `dd of=...`, `truncate`
+- git working-tree writes and `patch`: `git apply`, `git checkout --
+  <path>`, `git restore <path>`, `git stash pop`, `patch` — the target is
+  treated as `cwd` itself, so these are denied outright whenever the gate is
+  active
+- a target containing `$`, `` ` ``, or `$(` (a shell variable or command
+  substitution) is **not statically determinable** and is denied
+
+**Explicitly not covered** — this is a known-write-command-family gate, not a
+sandbox: writes performed from inside an interpreter (`python3`/`node`/`bash
+script.sh` writing files internally) and write commands forwarded through
+`xargs` are not inspected.
+
+Denial uses the same JSON shape as `dispatch-check.sh`, with the message
+built via `printf '%s' "$MSG" | jq -Rs .`. To lift the gate immediately, set
+`MAIN_EDIT_GATE_DISABLED=1`; otherwise it expires automatically after
+`MAIN_EDIT_GATE_TTL_MIN` minutes.
 
 ## Consultation Flow
 

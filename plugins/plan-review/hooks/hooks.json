@@ -34,6 +34,61 @@
             "statusMessage": "Checking dispatch manifest..."
           }
         ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
       }
     ],
     "PreCompact": [
