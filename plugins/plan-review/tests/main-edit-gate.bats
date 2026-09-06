@@ -483,3 +483,42 @@ assert_gate_deny_unknown() {
   run_main_edit_gate
   assert_gate_deny
 }
+
+# =============================================================================
+# Quoted spans are opaque to the redirect / separator heuristics (v1.8.1)
+# =============================================================================
+
+@test "gate: bash rg pattern with > inside double quotes is not a redirect, allows" {
+  create_main_edit_gate_marker "test-session" 2
+  INPUT=$(build_edit_input tool_name=Bash cwd="$PROJ" command='rg -n -A40 "public Map<String, ExternalDepartmentInfo> getAllDepartments" src/A.java | head -60')
+  run_main_edit_gate
+  assert_gate_allowed
+}
+
+@test "gate: bash rg pattern with > inside single quotes is not a redirect, allows" {
+  create_main_edit_gate_marker "test-session" 2
+  INPUT=$(build_edit_input tool_name=Bash cwd="$PROJ" command="rg -n 'List<String> names' src/")
+  run_main_edit_gate
+  assert_gate_allowed
+}
+
+@test "gate: bash quoted pattern containing pipe and semicolon does not split into a write command, allows" {
+  create_main_edit_gate_marker "test-session" 2
+  INPUT=$(build_edit_input tool_name=Bash cwd="$PROJ" command='rg -v "^\s*(\*|/\*|//); cp x" src/A.java')
+  run_main_edit_gate
+  assert_gate_allowed
+}
+
+@test "gate: bash real redirect after a quoted pattern containing > still denies" {
+  create_main_edit_gate_marker "test-session" 2
+  INPUT=$(build_edit_input tool_name=Bash cwd="$PROJ" command='rg -n "Map<String, X>" src/ > src/out.txt')
+  run_main_edit_gate
+  assert_gate_deny
+}
+
+@test "gate: bash escaped quote outside quotes does not open a quoted span, redirect still denies" {
+  create_main_edit_gate_marker "test-session" 2
+  INPUT=$(build_edit_input tool_name=Bash cwd="$PROJ" command='echo \" > src/A.java')
+  run_main_edit_gate
+  assert_gate_deny
+}

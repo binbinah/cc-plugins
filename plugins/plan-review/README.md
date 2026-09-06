@@ -226,6 +226,11 @@ inside a `cat <<EOF` block) is conservatively denied along with real
 commands, since the hook cannot distinguish heredoc payload from executable
 text without a real shell parser.
 
+- quoted spans are opaque (v1.8.1): a `>`, `<`, `|`, `;` or `&` inside a
+  single- or double-quoted string is neither a redirect nor a separator, so
+  `rg -n "Map<String, X> foo" src/A.java` is read-only; a quoted redirect
+  *target* (`> "src/A.java"`) is still judged, and an unterminated quote
+  fails open
 - redirection (`>`, `>>`, `>|`, `&>`, `&>>`), skipping `/dev/null`; a pure
   fd-duplication form (`2>&1`, `>&2`) is not treated as a write target, but
   an fd-numbered redirect to a path (e.g. `2> path`) is judged like any

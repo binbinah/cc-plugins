@@ -226,6 +226,57 @@ tokenize() {
   IFS="$old_ifs"
 }
 
+# mask_quoted_operators <command> — prints the command with every shell
+# metacharacter that sits INSIDE a single- or double-quoted span (`>`, `<`,
+# `|`, `;`, `&`) replaced by `_`. Quote characters themselves, and every
+# character outside a quoted span, are preserved verbatim, so a quoted
+# redirect *target* (`> "src/A.java"`) still reaches target_verdict intact
+# while a quoted *pattern* (`rg "Map<String, X>" f`) no longer reads as a
+# redirect. Outside quotes a backslash escapes the next character; inside
+# double quotes only `\\` and `\"` are escapes; single quotes take no
+# escapes at all. An unterminated quote masks through end-of-string, which
+# fails open — the same direction as every other parse limit in this hook.
+mask_quoted_operators() {
+  local s="$1"
+  local n=${#s}
+  local out=""
+  local i c q=""
+  for ((i=0; i<n; i++)); do
+    c="${s:i:1}"
+    if [ -z "$q" ]; then
+      case "$c" in
+        \\) out="${out}${c}"; i=$((i+1)); [ "$i" -lt "$n" ] && out="${out}${s:i:1}" ;;
+        \"|\') q="$c"; out="${out}${c}" ;;
+        *) out="${out}${c}" ;;
+      esac
+    elif [ "$q" = '"' ]; then
+      case "$c" in
+        \\)
+          out="${out}${c}"
+          i=$((i+1))
+          if [ "$i" -lt "$n" ]; then
+            c="${s:i:1}"
+            case "$c" in
+              '>'|'<'|'|'|';'|'&') out="${out}_" ;;
+              *) out="${out}${c}" ;;
+            esac
+          fi
+          ;;
+        \") q=""; out="${out}${c}" ;;
+        '>'|'<'|'|'|';'|'&') out="${out}_" ;;
+        *) out="${out}${c}" ;;
+      esac
+    else
+      case "$c" in
+        \') q=""; out="${out}${c}" ;;
+        '>'|'<'|'|'|';'|'&') out="${out}_" ;;
+        *) out="${out}${c}" ;;
+      esac
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # Globals used to report the outcome of evaluate_subcmd.
 SUBCMD_VERDICT="allow"
 SUBCMD_TARGET=""
@@ -559,6 +610,12 @@ fi
 # TOOL_NAME = Bash
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || true)
 [ -n "$COMMAND" ] || exit 0
+
+# Quoted spans are opaque to the redirect / separator heuristics below: a
+# `>` inside an rg pattern (Java generics, HTML, arrows in log text) must
+# not be read as a redirect, and a `|` or `;` inside a pattern must not
+# split the command. Masking keeps quoted redirect targets intact.
+COMMAND="$(mask_quoted_operators "$COMMAND")"
 
 split_commands "$COMMAND"
 for SUB in "${SPLIT_CMDS[@]}"; do
