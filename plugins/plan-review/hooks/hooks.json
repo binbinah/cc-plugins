@@ -1,5 +1,5 @@
 {
-  "description": "Adversarial red-team review on ExitPlanMode via Gemini, Claude, or Codex engine",
+  "description": "Adversarial red-team review on ExitPlanMode via Gemini, Claude, or Codex engine + return-verify gate on SubagentStop/PostToolUse/PreToolUse",
   "hooks": {
     "PreToolUse": [
       {
@@ -21,6 +21,12 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-check.sh",
             "timeout": 5,
             "statusMessage": "Checking dispatch manifest..."
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking return-verify gate..."
           }
         ]
       },
@@ -32,6 +38,12 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-check.sh",
             "timeout": 5,
             "statusMessage": "Checking dispatch manifest..."
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking return-verify gate..."
           }
         ]
       },
@@ -87,6 +99,65 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/main-edit-gate.sh",
             "timeout": 5,
             "statusMessage": "Checking main-session edit gate..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-clear.sh",
+            "timeout": 5,
+            "statusMessage": "Clearing return-verify gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-clear.sh",
+            "timeout": 5,
+            "statusMessage": "Clearing return-verify gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-clear.sh",
+            "timeout": 5,
+            "statusMessage": "Clearing return-verify gate..."
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-clear.sh",
+            "timeout": 5,
+            "statusMessage": "Clearing return-verify gate..."
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/return-verify-mark.sh",
+            "timeout": 5,
+            "statusMessage": "Recording sub-agent return..."
           }
         ]
       }

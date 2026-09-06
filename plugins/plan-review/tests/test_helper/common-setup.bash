@@ -10,6 +10,9 @@ HOOK_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/plan-review.sh"
 PRECOMPACT_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/precompact-review.sh"
 DISPATCH_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/dispatch-check.sh"
 MAIN_EDIT_GATE_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/main-edit-gate.sh"
+RETURN_VERIFY_MARK_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/return-verify-mark.sh"
+RETURN_VERIFY_CLEAR_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/return-verify-clear.sh"
+RETURN_VERIFY_GATE_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/return-verify-gate.sh"
 SECOND_OPINION_SCRIPT="${BATS_TEST_DIRNAME}/../scripts/second-opinion.sh"
 SYSTEM_PROMPT_PLAN_FILE="${BATS_TEST_DIRNAME}/../scripts/assets/review-plan.md"
 SYSTEM_PROMPT_COMMON_FILE="${BATS_TEST_DIRNAME}/../scripts/assets/review-common.md"
@@ -88,6 +91,10 @@ reset_leaky_env() {
   # codex repo access opt-in (a user-level settings.json env export would
   # otherwise leak in and flip the default-off tests)
   unset REVIEW_REPO_ACCESS
+
+  # return-verify-gate kill switch / TTL override
+  unset RETURN_VERIFY_GATE_DISABLED
+  unset RETURN_VERIFY_TTL_MIN
 
   # Per-engine model ids. None of these change control flow today, so an
   # exported value breaks nothing at present — they are listed to keep this
@@ -1286,4 +1293,93 @@ assert_log_contains() {
   local log_file="${REVIEW_LOG_DIR}/plan-review.log"
   [ -f "$log_file" ] || { echo "Log file missing: $log_file"; return 1; }
   grep -q -- "$pattern" "$log_file" || { echo "Pattern '$pattern' not found in log:"; cat "$log_file"; return 1; }
+}
+
+# --- return-verify-gate helpers ---
+
+# build_hook_input key=value...
+#   Generic hook-input JSON builder shared by the three return-verify
+#   scripts. Only fields explicitly passed are written into the JSON — no
+#   defaults are silently injected (unlike build_edit_input, whose defaults
+#   suit the single-script main-edit-gate case). Recognized keys: event
+#   (unused by production, kept for readability in the call site),
+#   tool_name, session_id (default: test-session when omitted... actually
+#   only written if given), cwd, agent_id, agent_type, command.
+build_hook_input() {
+  local tool_name="" session_id="" cwd="" agent_id="" agent_type="" command=""
+  local have_tool_name=0 have_session_id=0 have_cwd=0 have_agent_id=0 have_agent_type=0 have_command=0
+
+  for arg in "$@"; do
+    local key="${arg%%=*}"
+    local val="${arg#*=}"
+    case "$key" in
+      event) : ;; # accepted, not written — kept for call-site readability only
+      tool_name)  tool_name="$val";  have_tool_name=1 ;;
+      session_id) session_id="$val"; have_session_id=1 ;;
+      cwd)        cwd="$val";        have_cwd=1 ;;
+      agent_id)   agent_id="$val";   have_agent_id=1 ;;
+      agent_type) agent_type="$val"; have_agent_type=1 ;;
+      command)    command="$val";    have_command=1 ;;
+    esac
+  done
+
+  local result="{}"
+  [ "$have_tool_name" -eq 0 ]  || result=$(printf '%s' "$result" | jq --arg v "$tool_name"  '. + {tool_name: $v}')
+  [ "$have_session_id" -eq 0 ] || result=$(printf '%s' "$result" | jq --arg v "$session_id" '. + {session_id: $v}')
+  [ "$have_cwd" -eq 0 ]        || result=$(printf '%s' "$result" | jq --arg v "$cwd"        '. + {cwd: $v}')
+  [ "$have_agent_id" -eq 0 ]   || result=$(printf '%s' "$result" | jq --arg v "$agent_id"    '. + {agent_id: $v}')
+  [ "$have_agent_type" -eq 0 ] || result=$(printf '%s' "$result" | jq --arg v "$agent_type"  '. + {agent_type: $v}')
+  if [ "$have_command" -eq 1 ]; then
+    result=$(printf '%s' "$result" | jq --arg v "$command" '. + {tool_input: {command: $v}}')
+  fi
+
+  printf '%s' "$result"
+}
+
+# run_return_verify_mark / run_return_verify_clear / run_return_verify_gate
+#   Same shape as run_main_edit_gate: reads $INPUT (default: empty hook
+#   input), captures stdout/stderr/exit into HOOK_STDOUT/HOOK_STDERR/HOOK_EXIT.
+run_return_verify_mark() {
+  local input="${INPUT:-{}}"
+  HOOK_STDOUT=""; HOOK_STDERR=""; HOOK_EXIT=0
+  local stderr_file; stderr_file=$(mktemp)
+  HOOK_STDOUT=$(bash "$RETURN_VERIFY_MARK_SCRIPT" <<< "$input" 2>"$stderr_file") || HOOK_EXIT=$?
+  HOOK_STDERR=$(cat "$stderr_file")
+  rm -f "$stderr_file"
+}
+
+run_return_verify_clear() {
+  local input="${INPUT:-{}}"
+  HOOK_STDOUT=""; HOOK_STDERR=""; HOOK_EXIT=0
+  local stderr_file; stderr_file=$(mktemp)
+  HOOK_STDOUT=$(bash "$RETURN_VERIFY_CLEAR_SCRIPT" <<< "$input" 2>"$stderr_file") || HOOK_EXIT=$?
+  HOOK_STDERR=$(cat "$stderr_file")
+  rm -f "$stderr_file"
+}
+
+run_return_verify_gate() {
+  local input="${INPUT:-{}}"
+  HOOK_STDOUT=""; HOOK_STDERR=""; HOOK_EXIT=0
+  local stderr_file; stderr_file=$(mktemp)
+  HOOK_STDOUT=$(bash "$RETURN_VERIFY_GATE_SCRIPT" <<< "$input" 2>"$stderr_file") || HOOK_EXIT=$?
+  HOOK_STDERR=$(cat "$stderr_file")
+  rm -f "$stderr_file"
+}
+
+# create_return_verify_marker <session> <n>
+#   Writes a `.return-verify-<session>` state file with n pending entries
+#   (agent_id "a1".."an", agent_type "general-purpose").
+create_return_verify_marker() {
+  local session="$1"
+  local n="${2:-1}"
+  local pending="[]"
+  local i=1
+  while [ "$i" -le "$n" ]; do
+    pending=$(printf '%s' "$pending" | jq --arg aid "a${i}" --arg atype "general-purpose" --argjson stopped_at "$(date +%s)" \
+      '. + [{agent_id: $aid, agent_type: $atype, stopped_at: $stopped_at}]')
+    i=$((i+1))
+  done
+  jq -n --argjson pending "$pending" --argjson now "$(date +%s)" \
+    '{pending: $pending, updated_at: $now}' \
+    > "${REVIEW_COUNTER_DIR}/.return-verify-${session}"
 }

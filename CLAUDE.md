@@ -32,7 +32,7 @@ WooDragon 的 Claude Code 插件 + 技能包 marketplace。
 plugins/
   plan-review/                    # 对抗性审阅插件
     .claude-plugin/plugin.json    # 插件元数据
-    hooks/hooks.json              # PreToolUse + PreCompact hook 声明
+    hooks/hooks.json              # PreToolUse + PostToolUse + SubagentStop + PreCompact hook 声明
     scripts/
       plan-review.sh             # 编排器（hook）：守卫→计数→双安全阀→预检→prompt 组装→重试驱动→verdict 分支
       second-opinion.sh          # 通用第二意见驱动：插件外调用方直接拿评审正文，fail loud，不做 verdict 解析
@@ -42,6 +42,7 @@ plugins/
         plan-source.sh           # transcript 反查三重安全门 + 提取链 + RESOLVE_REASON 三态文案
         verdict.sh               # verdict 提取 + APPROVE/CONCERNS/REJECT 三种反馈渲染
         manifest.sh              # Manifest 检测三函数 + MANIFEST_EXAMPLE + JSON 序列化
+        return-verify.sh         # 回传核验门禁共用：marker 目录/TTL、main-edit-gate 布防判定（rv_gate_armed）、stale 清理
         engines/                 # 引擎三钩子接口（engine_probe/engine_invoke/engine_extract）
           agy.sh                 # gemini 引擎（默认，agy CLI，含 JSON 文本切片 + conversation 复用）
           claude.sh              # REVIEW_ENGINE=claude
@@ -52,10 +53,14 @@ plugins/
         review-plan.md           # plan 专有层（框架语 / Scope Boundary / 9 条 Review Criteria / 输出长度上限），hook 拼接在 review-common.md 之前
       dispatch-check.sh          # Layer 2 hook（Agent/Task 调度参数强制）
       precompact-review.sh       # PreCompact hook（compaction 恢复）
+      return-verify-mark.sh      # SubagentStop hook：把回传的子代理记入待核验队列
+      return-verify-clear.sh     # PostToolUse hook：主会话跑一次只读工具（Bash/Read/Grep/Glob）即清空队列
+      return-verify-gate.sh      # PreToolUse hook（Agent/Task）：队列非空则拒绝下一次派发
     tests/                        # BDD 测试套件（bats-core；用例计数属动态指标，权威版本见 MEMORY.md 层）
       plan-review.bats            # 主测试套件（含 Dispatch Manifest、codex 引擎、轮间记忆）
       dispatch-check.bats         # Layer 2 hook 测试
       second-opinion.bats         # second-opinion.sh 驱动测试
+      return-verify-gate.bats     # 回传核验门禁测试（mark/clear/gate 三脚本 + hooks.json 注册断言）
       test_helper/
         common-setup.bash         # 测试基础设施（mock、断言）
   doc-gate/                       # 文档编辑门禁 + 词法召回插件
@@ -171,7 +176,7 @@ plugins/
 
 | 插件 | 变量前缀/名称 | 权威文档 |
 |------|--------------|----------|
-| plan-review | `REVIEW_*`、`AGY_MODEL`、`CLAUDE_MODEL`、`GEMINI_MODEL`、`CODEX_BIN`、`CODEX_MODEL`、`DISPATCH_CHECK_DISABLED` | [plugins/plan-review/README.md](plugins/plan-review/README.md#environment-variables) |
+| plan-review | `REVIEW_*`、`AGY_MODEL`、`CLAUDE_MODEL`、`GEMINI_MODEL`、`CODEX_BIN`、`CODEX_MODEL`、`DISPATCH_CHECK_DISABLED`、`RETURN_VERIFY_*` | [plugins/plan-review/README.md](plugins/plan-review/README.md#environment-variables) |
 | doc-gate | `SKILL_GATE_*`、`RECALL_GATE_*` | [plugins/doc-gate/README.md](plugins/doc-gate/README.md#environment-variables) |
 | deep-research | `GATEWAY_API_KEY`、`TAVILY_API_KEY`、`JINA_API_KEY`（可选凭证） | [plugins/deep-research/README.md](plugins/deep-research/README.md#prerequisites) |
 | pr-review | `GROK_MODEL`、`GROK_EFFORT`、`CLAUDE_REVIEW_MODEL`、`CLAUDE_REVIEW_EFFORT`、`PR_REVIEW_BACKEND`、`XDG_STATE_HOME`（session 落盘根） | [plugins/pr-review/README.md](plugins/pr-review/README.md#environment-variables) |

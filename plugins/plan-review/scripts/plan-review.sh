@@ -281,6 +281,9 @@ find "$DISPATCH_DIR" -maxdepth 1 -name '.dispatch-*.json*' -mmin +30 -delete 2>/
 # APPROVE, consumed by scripts/main-edit-gate.sh) — a session that is never
 # resumed would otherwise leave it around forever.
 find "$DISPATCH_DIR" -maxdepth 1 -name '.main-edit-gate-*' -mmin "+${MAIN_EDIT_GATE_TTL_MIN:-180}" -delete 2>/dev/null || true
+# Same debris cleanup for the return-verify-gate pending state (armed by
+# return-verify-mark.sh, consumed by scripts/return-verify-gate.sh).
+find "$DISPATCH_DIR" -maxdepth 1 -name '.return-verify-*' -mmin "+${RETURN_VERIFY_TTL_MIN:-180}" -delete 2>/dev/null || true
 
 # --- Read counter (new format ATTEMPT:TOTAL, backward-compat with old single-number) ---
 IFS=: read -r ATTEMPT TOTAL_ROUNDS <<< "$(cat "$COUNTER_FILE" 2>/dev/null || echo "0:0")"
@@ -779,6 +782,10 @@ if [ "$VERDICT" = "APPROVE" ]; then
                 '{plan_hash: $hash, created_at: $created_at, agent_rows: $rows}' > "$GATE_TEMP" 2>/dev/null \
            && mv -f "$GATE_TEMP" "$GATE_MARKER"; then
           log_decision "main-edit-gate-armed rows=$agent_rows"
+          # A new plan approval re-arms the gate; any return-verify-gate
+          # pending state from a prior round is now stale (it references
+          # sub-agents dispatched under the old approval) — clear it.
+          rm -f "$COUNTER_DIR/.return-verify-${SESSION_ID}" 2>/dev/null || true
         else
           rm -f "${GATE_TEMP:-}" || true
           log_decision "main-edit-gate-arm-failed" || true

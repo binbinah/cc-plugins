@@ -132,6 +132,13 @@ is written, separate from `plan-review.log`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MAIN_EDIT_GATE_DISABLED` | `0` | Set `1` to disable the [main-session edit gate](#main-session-edit-gate-v180) (kill switch) |
+
+### `return-verify-mark.sh` / `return-verify-clear.sh` / `return-verify-gate.sh` (return-verify gate)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RETURN_VERIFY_GATE_DISABLED` | `0` | Set `1` to disable the [return-verify gate](#return-verify-gate-v190) (kill switch) |
+| `RETURN_VERIFY_TTL_MIN` | `180` | Minutes before the pending-verification state expires; a non-numeric or empty override falls back to `180` |
 | `MAIN_EDIT_GATE_TTL_MIN` | `180` | Minutes before an armed gate marker expires; on expiry the marker is treated as pass-through and deleted |
 
 ### Dispatch Manifest v2
@@ -258,6 +265,66 @@ Denial uses the same JSON shape as `dispatch-check.sh`, with the message
 built via `printf '%s' "$MSG" | jq -Rs .`. To lift the gate immediately, set
 `MAIN_EDIT_GATE_DISABLED=1`; otherwise it expires automatically after
 `MAIN_EDIT_GATE_TTL_MIN` minutes.
+
+## Return-verify gate (v1.9.0)
+
+Once `main-edit-gate.sh` is armed, delegating work to agents is not enough on
+its own — the main session must actually look at what a dispatched agent
+produced before sending the next one. This gate enforces that: after a
+plan is approved and dispatched, every sub-agent return must be followed by
+at least one main-session read-only tool call before another `Agent`/`Task`
+call is allowed through.
+
+Three cooperating scripts, one shared state file per session
+(`${REVIEW_COUNTER_DIR:-/tmp/claude-reviews}/.return-verify-<session_id>`,
+JSON: `{"pending": [{"agent_id", "agent_type", "stopped_at"}, ...],
+"updated_at"}`), written atomically via a `mktemp` temp file in the same
+directory followed by `mv`:
+
+- **`return-verify-mark.sh`** (`SubagentStop`, all matchers) — appends the
+  sub-agent that just stopped to `pending`. Unlike `main-edit-gate.sh`, this
+  hook does **not** skip on a non-empty `agent_id`/`agent_type`: `SubagentStop`
+  fires with the *parent* session's `session_id`, and `agent_id`/`agent_type`
+  identify the sub-agent whose return is being recorded — that is the event
+  worth marking, not one to filter out.
+- **`return-verify-clear.sh`** (`PostToolUse` on `Bash`, `Read`, `Grep`,
+  `Glob`) — deletes the state file whenever the *main* session (empty
+  `agent_id`/`agent_type`) runs one of those tools. `PostToolUse` never makes
+  a permission decision, so this hook always exits 0 with no output.
+- **`return-verify-gate.sh`** (`PreToolUse` on `Agent`/`Task`, registered
+  after `dispatch-check.sh`) — denies the call when `pending` is non-empty
+  for this session.
+
+**Pass-through conditions** (any one is enough to allow the call through,
+with no output):
+
+- `RETURN_VERIFY_GATE_DISABLED=1` (kill switch)
+- `jq` is not available
+- the hook input has no `session_id`
+- the hook input has a non-empty `agent_id` or `agent_type` (a sub-agent's
+  own nested dispatch is not gated)
+- the state file for this session does not exist
+- the state file's content is not valid JSON, or `pending` is empty
+- the state file is older than `RETURN_VERIFY_TTL_MIN` minutes (default
+  `180`; non-numeric/empty falls back to `180`) — the stale file is deleted
+  as a side effect
+- `main-edit-gate.sh`'s own marker for this session is missing, stale, or
+  has `agent_rows < 1` (shared `rv_gate_armed` predicate in
+  `scripts/lib/return-verify.sh`) — the return-verify gate is only live
+  while the main-edit-gate itself is armed; a plan-approval-less or expired
+  session clears any stale pending state as a side effect
+
+Denial uses the same JSON shape as `main-edit-gate.sh`/`dispatch-check.sh`.
+The reason names each pending agent as `<agent_type>/<agent_id first 8
+chars>`, joined with `、`, and points at running a read-only command (`git
+diff --stat`, `wc -l`, a test-report summary, `rg` for a key symbol, or
+`Read` on a key file) before dispatching the next step.
+
+`scripts/plan-review.sh` clears `.return-verify-<session_id>` whenever it
+re-arms `main-edit-gate.sh` on a fresh APPROVE (a new approval invalidates
+any pending state left over from the prior round's dispatches), and its
+stale-cleanup pass also sweeps `.return-verify-*` files past
+`RETURN_VERIFY_TTL_MIN`.
 
 ## Consultation Flow
 
