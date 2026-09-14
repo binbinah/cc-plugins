@@ -2142,7 +2142,7 @@ Approved."
   reason=$(echo "$HOOK_STDOUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')
   [[ "$reason" == *"DISPATCH HOARDING"* ]]
   [[ "$reason" == *"必须同时移除 Manifest 与全部调度关键词"* ]]
-  [[ "$reason" == *"显式声明至少一个 Agent step"* ]]
+  [[ "$reason" == *"显式声明至少一个 Agent 或 pi step"* ]]
 }
 
 @test "manifest v2: preset-only row is structurally valid" {
@@ -2165,6 +2165,63 @@ Approved."
   run_hook
 
   assert_ack_approve_json
+}
+
+@test "manifest v2 pi row: valid explore pi row passes structural validation" {
+  create_mock_engine "agy" "<verdict>APPROVE</verdict>
+Approved."
+  local plan
+  plan=$(manifest_v2_plan '| 1 主线批准 | main | - | - | - | - | - |
+| 2 | pi | explore | - | - | 1 | - |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+
+  assert_ack_approve_json
+}
+
+@test "manifest v2 pi row: subagent_type other than explore/implement rejects" {
+  local plan
+  plan=$(manifest_v2_plan '| 1 主线批准 | main | - | - | - | - | - |
+| 2 | pi | Explore | - | - | 1 | - |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+  assert_deny_json
+  [[ "$(echo "$HOOK_STDOUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')" == *"pi rows require subagent_type explore or implement"* ]]
+
+  plan=$(manifest_v2_plan '| 1 主线批准 | main | - | - | - | - | - |
+| 2 | pi | haiku | - | - | 1 | - |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+  assert_deny_json
+  [[ "$(echo "$HOOK_STDOUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')" == *"pi rows require subagent_type explore or implement"* ]]
+}
+
+@test "manifest v2 pi row: non-dash model rejects" {
+  local plan
+  plan=$(manifest_v2_plan '| 1 主线批准 | main | - | - | - | - | - |
+| 2 | pi | explore | - | haiku | 1 | - |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+  assert_deny_json
+  [[ "$(echo "$HOOK_STDOUT" | jq -r '.hookSpecificOutput.permissionDecisionReason')" == *"pi rows require model_source and model to be -"* ]]
+}
+
+@test "manifest v2 pi row: main plus pi rows do not hoard and arm the gate with agent_rows 1" {
+  create_mock_engine "agy" "<verdict>APPROVE</verdict>
+Approved."
+  local plan
+  plan=$(manifest_v2_plan '| 1 主线批准 | main | - | - | - | - | - |
+| 2 | pi | explore | - | - | 1 | - |')
+  INPUT=$(build_input "plan=$plan")
+  run_hook
+
+  assert_ack_approve_json
+  local reason
+  reason=$(echo "$HOOK_STDOUT" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+  [[ "$reason" != *"DISPATCH HOARDING"* ]]
+  local gate_marker="${REVIEW_COUNTER_DIR}/.main-edit-gate-test-session"
+  [ -f "$gate_marker" ]
+  jq -e '.agent_rows == 1' "$gate_marker" >/dev/null
 }
 
 @test "manifest v2: Main row rejects subagent fields" {

@@ -52,7 +52,7 @@ manifest_has_agent_signature() {
       line=$0
       sub(/^[[:space:]]*\|[[:space:]]*/, "", line)
       split(line, fields, /[[:space:]]*\|[[:space:]]*/)
-      if (tolower(fields[2]) ~ /^[[:space:]]*agent[[:space:]]*$/) found=1
+      if (tolower(fields[2]) ~ /^[[:space:]]*(agent|pi)[[:space:]]*$/) found=1
     }
     END { exit !found }
   ' <<<"$rows"
@@ -73,11 +73,13 @@ MANIFEST_EXAMPLE=$(cat <<'MANIFEST_EOF'
 | 1    | main     | -             | -            | -     | -          | -             |
 | 2    | agent    | <agent_type>  | preset       | -     | 1          | -             |
 | 3    | agent    | <agent_type>  | runtime      | <model> | 1        | 2             |
+| 4    | pi       | explore       | -            | -     | 2          | -             |
 
 填写规则：
 - `main` 行：subagent_type、model_source、model 均填 `-`。
 - `agent` + `preset` 行：subagent_type 必填，model 必须填 `-`（调用时完全省略 model）。
 - `agent` + `runtime` 行：subagent_type 与 model 必填（调用时二者精确匹配）。
+- `pi` 行（主会话经 run_pi.sh 派本机 pi）：subagent_type 填 explore 或 implement，model_source 与 model 填 `-`。
 - depends_on / parallel_with：填依赖/并行的 step 号，无则填 `-`。
 MANIFEST_EOF
 )
@@ -126,8 +128,11 @@ validate_manifest_v2() {
         } else {
           fail("agent rows require model_source preset or runtime")
         }
+      } else if (location == "pi") {
+        if (agent_type != "explore" && agent_type != "implement") fail("pi rows require subagent_type explore or implement")
+        if (model_source != "-" || model != "-") fail("pi rows require model_source and model to be -")
       } else {
-        fail("location must be main or agent")
+        fail("location must be main, agent, or pi")
       }
       row_count++
     }
@@ -223,6 +228,9 @@ dispatch_state_is_valid_v2() {
         (.subagent_type | nonempty_string) and .model == null
       elif .location == "agent" and .model_source == "runtime" then
         (.subagent_type | nonempty_string) and (.model | nonempty_string)
+      elif .location == "pi" then
+        (.subagent_type == "explore" or .subagent_type == "implement") and
+        .model_source == null and .model == null
       else
         false
       end

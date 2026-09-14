@@ -445,8 +445,8 @@ if needs_manifest "$PLAN" && ! manifest_has_agent_signature "$PLAN"; then
   log_decision "decision=deny reason=dispatch-hoarding"
   HOARDING_MSG="## Red Team Pre-flight — DISPATCH HOARDING
 
-Plan 声明了 Agent/Task 调度意图，但 Manifest v2 没有任何 \`agent\` 行。不得把全部工作囤积在 Main。
-Tier0 工作若保留在 Main，必须同时移除 Manifest 与全部调度关键词；否则显式声明至少一个 Agent step 后重新调用 ExitPlanMode。
+Plan 声明了 Agent/Task 调度意图，但 Manifest v2 没有任何 \`agent\` 或 \`pi\` 行。不得把全部工作囤积在 Main。
+Tier0 工作若保留在 Main，必须同时移除 Manifest 与全部调度关键词；否则显式声明至少一个 Agent 或 pi step 后重新调用 ExitPlanMode。
 
 ${MANIFEST_EXAMPLE}"
   HOARDING_JSON=$(printf '%s' "$HOARDING_MSG" | jq -Rs .)
@@ -772,7 +772,7 @@ if [ "$VERDICT" = "APPROVE" ]; then
       # agent. Written here, at the same moment the dispatch state is
       # serialized — the gate must already be armed by the time Claude's very
       # next tool call happens, which is before the ack-round is ever seen.
-      agent_rows=$(jq '[.steps[] | select(.location=="agent")] | length' "$DISPATCH_FILE" 2>/dev/null || echo 0)
+      agent_rows=$(jq '[.steps[] | select(.location=="agent" or .location=="pi")] | length' "$DISPATCH_FILE" 2>/dev/null || echo 0)
       [[ "$agent_rows" =~ ^[0-9]+$ ]] || agent_rows=0
       if [ "$agent_rows" -ge 1 ]; then
         GATE_MARKER="$COUNTER_DIR/.main-edit-gate-${SESSION_ID}"
