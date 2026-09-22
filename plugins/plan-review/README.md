@@ -144,7 +144,7 @@ is written, separate from `plan-review.log`.
 ### Dispatch Manifest v2
 
 A plan with dispatch keywords must include a Dispatch Manifest with at least one
-`agent` or `pi` row. A plan without dispatch keywords, including Tier0 work, remains
+`agent` row. A plan without dispatch keywords, including Tier0 work, remains
 Manifest-free. `plan-review.sh` stores only the approved v2 signature set. The
 fixed columns are `step | location | subagent_type | model_source | model |
 depends_on | parallel_with`.
@@ -154,9 +154,6 @@ depends_on | parallel_with`.
   omit `model`.
 - `agent` + `runtime` rows require both `subagent_type` and `model`; the hook
   matches both values exactly.
-- `pi` rows (`location=pi`) are executed by the local pi worker via `run_pi.sh`
-  instead of the Agent tool; `subagent_type` must be `explore` or `implement`,
-  and `model_source` / `model` must both be `-`.
 
 The hook permits repeated matching calls. It does not implement a step cursor,
 call count, execution order, or global model ownership policy. State with no
@@ -192,7 +189,7 @@ form is no longer accepted as a section marker.
 ## Main-session edit gate (v1.8.0)
 
 When `plan-review.sh` APPROVEs a plan whose Dispatch Manifest contains at
-least one `agent` or `pi` row, it atomically writes a marker file
+least one `agent` row, it atomically writes a marker file
 `${REVIEW_COUNTER_DIR:-/tmp/claude-reviews}/.main-edit-gate-<session_id>`
 (JSON: `plan_hash`, `created_at`, `agent_rows`). A separate hook,
 `scripts/main-edit-gate.sh`, is registered on PreToolUse for `Edit`, `Write`,

@@ -54,12 +54,9 @@ Keep your response under 3000 characters.
    - Manifest v2 columns are exactly: `step | location | subagent_type |
      model_source | model | depends_on | parallel_with`. Main rows use `-` for
      subagent_type, model_source, and model; preset rows omit model; runtime
-     rows require it. pi rows (location = pi, executed by the local pi worker via
-     run_pi.sh) require subagent_type explore or implement and use - for
-     model_source and model; they count as delegation for the hoarding check.
-     Missing manifest when dispatch keywords are present is
+     rows require it. Missing manifest when dispatch keywords are present is
      [Major]; a structurally invalid manifest is [Critical]. A dispatch
-     Manifest with neither an `agent` row nor a `pi` row is full hoarding [Critical]. A Manifest that
+     Manifest with no `agent` row is full hoarding [Critical]. A Manifest that
      retains some delegable work in Main is partial hoarding [Major].
    - Exception: a single-file documentation or style edit of roughly 20
      lines or fewer, and edits to the plan itself or to Claude
